@@ -1,0 +1,16 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>netcoreapp2.2</TargetFramework>
+    <StartupObject>ActivatorTest.Program</StartupObject>
+    <ApplicationIcon />
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="ILLink.Tasks" Version="0.1.5-preview-1841731" />
+  </ItemGroup>
+  <PropertyGroup>
+    <ShowLinkerSizeComparison>true</ShowLinkerSizeComparison>
+    <RootAllApplicationAssemblies>false</RootAllApplicationAssemblies>
+  </PropertyGroup>
+</Project>

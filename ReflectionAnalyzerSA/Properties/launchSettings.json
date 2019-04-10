@@ -1,0 +1,8 @@
+{
+  "profiles": {
+    "ReflectionAnalyzerSA": {
+      "commandName": "Project",
+      "commandLineArgs": "\"C:\\Users\\Никита\\source\\repos\\ReflectionAnalyzerSA\\ReflectionAnalyzerSA.sln\""
+    }
+  }
+}
