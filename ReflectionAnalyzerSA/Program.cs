@@ -223,7 +223,36 @@ namespace ReflectionAnalyzerSA
 
         private static string CreateLinkerConfiguration(IEnumerable<(string Assembly, string Type)> reservedTypes)
         {
-            return "";
+            var typesDict = new Dictionary<string, List<string>>();
+            foreach (var (assembly, type) in reservedTypes)
+            {
+                if(typesDict.ContainsKey(assembly))
+                    typesDict[assembly].Add(type);
+                else
+                    typesDict.Add(assembly, new List<string> { type });
+            }
+
+            const string header = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<linker>\n\t";
+            const string footer = "</linker>";
+
+            var body = "";
+            
+            foreach (var kv in typesDict)
+            {
+                var assembly = kv.Key;
+                var types = kv.Value;
+                var assemblyBlock = $"<assembly fullname=\"{assembly}\">\n\t\t";
+                foreach (var type in types)
+                    assemblyBlock += $"<type fullname=\"{type}\"/>\n\t\t";
+                // remove last \t
+                assemblyBlock = assemblyBlock.Substring(0, assemblyBlock.Length - 1);
+                assemblyBlock += "</assembly>\n\t";
+                body += assemblyBlock;
+            }
+
+            body = body.Substring(0, body.Length - 1);
+
+            return header + body + footer;
         }
     }
 }
