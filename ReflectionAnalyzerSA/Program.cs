@@ -93,14 +93,9 @@ namespace ReflectionAnalyzerSA
                     MetadataReference.CreateFromFile(
                         typeof(Activator).Assembly.Location))
                 .AddSyntaxTrees(syntaxTree);
+            var semanticModel = compilation.GetSemanticModel(syntaxTree);
             
-            var semanticModel = compilation.GetSemanticModel(syntaxTree);            
-            
-            var root = syntaxTree.GetCompilationUnitRoot();
-
-            var nodes = GetNodes(root, semanticModel, "Activator", "CreateInstance")
-                .ToList();
-
+            var nodes = GetNodes(syntaxTree.GetRoot(), semanticModel, "Activator", "CreateInstance");
             var reservedTypesWithAssemblies = ProcessNodes(nodes, semanticModel);
             
             Console.WriteLine();
@@ -126,7 +121,7 @@ namespace ReflectionAnalyzerSA
         {
             var symbol = (IMethodSymbol)semanticModel.GetSymbolInfo(invocation).Symbol;
             if (symbol.TypeArguments.Length > 0)
-                return ProcessGenericTypeCase(invocation, semanticModel, symbol);
+                return ProcessGenericTypeCase(semanticModel, symbol);
             if (symbol.Parameters.Length > 0)
                 return ProcessTypeAsArgumentCase(invocation, semanticModel);
             throw new NotSupportedException();
@@ -164,13 +159,11 @@ namespace ReflectionAnalyzerSA
             }
         }
 
-        private static IEnumerable<(string, string)> ProcessGenericTypeCase(InvocationExpressionSyntax invocation, SemanticModel semanticModel, IMethodSymbol symbol)
+        private static IEnumerable<(string, string)> ProcessGenericTypeCase(SemanticModel semanticModel, IMethodSymbol symbol)
         {
             var constructedType = symbol.TypeArguments[0];
             if (constructedType.Kind != SymbolKind.TypeParameter)
-            {
                 return new List<(string, string)> { (constructedType.ContainingAssembly.Name, constructedType.Name) };
-            }
 
             var methodSymbol = constructedType.ContainingSymbol;
             var methodName = methodSymbol.Name;
@@ -204,12 +197,10 @@ namespace ReflectionAnalyzerSA
             }
         }
 
-        private static IEnumerable<InvocationExpressionSyntax> GetNodes(SyntaxNode root, SemanticModel semanticModel, string className, string methodName)
-        {
-            return root.DescendantNodes()
+        private static IEnumerable<InvocationExpressionSyntax> GetNodes(SyntaxNode root, SemanticModel semanticModel, string className, string methodName) =>
+            root.DescendantNodes()
                 .OfType<InvocationExpressionSyntax>()
                 .Where(IsActivatorCreateInstanceExpression(semanticModel, className, methodName));
-        }
 
         private static Func<InvocationExpressionSyntax, bool> IsActivatorCreateInstanceExpression(SemanticModel semanticModel, string className, string methodName)
         {
@@ -218,7 +209,6 @@ namespace ReflectionAnalyzerSA
                 var s = semanticModel.GetSymbolInfo(expression).Symbol;
                 return s.Kind == SymbolKind.Method && s.ContainingType.Name.Equals(className) && s.Name.Equals(methodName);
             }
-
             return DoCheck;
         }
     }
