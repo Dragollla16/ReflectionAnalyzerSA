@@ -106,11 +106,17 @@ namespace ReflectionAnalyzerSA
             }
         }
 
-        private static IEnumerable<(string, string)> ProcessNodes(IEnumerable<InvocationExpressionSyntax> nodes, SemanticModel semanticModel)
+        private static IEnumerable<(string, string)> ProcessNodes(IEnumerable<InvocationExpressionSyntax> nodes, SemanticModel semanticModel, bool withGeneric = true)
         {
             var reservedTypesWithAssemblies = new List<(string, string)>();
             foreach (var node in nodes)
             {
+                if (!withGeneric)
+                {
+                    var symbol = (IMethodSymbol)semanticModel.GetSymbolInfo(node).Symbol;
+                    if (symbol.TypeArguments.Length > 0)
+                        continue;
+                }
                 Console.WriteLine(node);
                 reservedTypesWithAssemblies.AddRange(ProcessInvocationsArgs(node, semanticModel));
             }
@@ -152,7 +158,7 @@ namespace ReflectionAnalyzerSA
                     var symbol = semanticModel.GetDeclaredSymbol(method);
                     var nodes = GetNodes(semanticModel.SyntaxTree.GetRoot(), semanticModel, symbol.ContainingType.Name,
                         symbol.Name).ToList();
-                    return ProcessNodes(nodes, semanticModel);
+                    return ProcessNodes(nodes, semanticModel, false);
                 }
                 default:
                     throw new NotSupportedException();
