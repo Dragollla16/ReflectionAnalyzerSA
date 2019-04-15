@@ -9,6 +9,7 @@ using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Symbols;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.FindSymbols;
 using Microsoft.CodeAnalysis.MSBuild;
 using Microsoft.CodeAnalysis.Text;
 
@@ -16,114 +17,209 @@ namespace ReflectionAnalyzerSA
 {
     class Program
     {
+        const string ProgramCsText = @"
+            using System;
+
+        namespace ActivatorTest
+        {
+            class Program
+            {
+        abstract class Base
+        {
+            public Base()
+            {
+                Console.WriteLine($""{this.GetType().Name} is instatiated"");
+            }
+            public Base(object o) { }
+        }
+
+        class TypeOfClass : Base { public TypeOfClass() : base() { } }
+        class GenericArgumentClass : Base { public GenericArgumentClass() : base() { } }
+        class GetTypeClass : Base
+        {
+            public GetTypeClass() : base() { }
+            public GetTypeClass(object o) : base(o) { }
+        }
+
+        static void Main(string[] args)
+        {
+            TryConstruct(typeof(TypeOfClass));
+            TryConstruct(new GetTypeClass(null).GetType());
+            TryConstruct<GenericArgumentClass>();
+            var type = typeof(TypeOfClass);
+            Activator.CreateInstance(type);
+            Activator.CreateInstance<GenericArgumentClass>();
+            Activator.CreateInstance(new GetTypeClass(null).GetType());
+            Console.ReadKey();
+        }
+
+        static void TryConstruct(Type type)
+        {
+            try
+            {
+                Activator.CreateInstance(type);
+            } catch(Exception e)
+            {
+                Console.WriteLine($""Could not instatiate {type.Name} class"");
+                Console.WriteLine(e.Message);
+            }
+        }
+        static void TryConstruct<T>()
+        {
+            try
+            {
+                Activator.CreateInstance<T>();
+            }
+            catch (Exception e)
+            {
+                Console.WriteLine($""Could not instatiate {typeof(T).Name} class"");
+                Console.WriteLine(e.Message);
+            }
+        }
+    }
+}
+";
+        
         static async Task Main(string[] args)
         {
             // Attempt to set the version of MSBuild.
-            var visualStudioInstances = MSBuildLocator.QueryVisualStudioInstances().ToArray();
-            var instance = visualStudioInstances.Length == 1
-                // If there is only one instance of MSBuild on this machine, set that as the one to use.
-                ? visualStudioInstances[0]
-                // Handle selecting the version of MSBuild you want to use.
-                : SelectVisualStudioInstance(visualStudioInstances);
+            MSBuildLocator.RegisterMSBuildPath(@"/Library/Frameworks/Mono.framework/Versions/Current/Commands/");
 
-            Console.WriteLine($"Using MSBuild at '{instance.MSBuildPath}' to load projects.");
+            var syntaxTree = CSharpSyntaxTree.ParseText(ProgramCsText);
+            var compilation = CSharpCompilation.Create("Test")
+                .AddReferences(
+                    MetadataReference.CreateFromFile(
+                        typeof(object).Assembly.Location), 
+                    MetadataReference.CreateFromFile(
+                        typeof(Activator).Assembly.Location))
+                .AddSyntaxTrees(syntaxTree);
+            
+            var semanticModel = compilation.GetSemanticModel(syntaxTree);            
+            
+            var root = syntaxTree.GetCompilationUnitRoot();
 
-            // NOTE: Be sure to register an instance with the MSBuildLocator 
-            //       before calling MSBuildWorkspace.Create()
-            //       otherwise, MSBuildWorkspace won't MEF compose.
-            MSBuildLocator.RegisterInstance(instance);
+            var nodes = GetNodes(root, semanticModel, "Activator", "CreateInstance")
+                .ToList();
 
-            using (var workspace = MSBuildWorkspace.Create())
+            var reservedTypesWithAssemblies = ProcessNodes(nodes, semanticModel);
+            
+            Console.WriteLine();
+            foreach (var typeWithAssembly in reservedTypesWithAssemblies)
             {
-                // Print message for WorkspaceFailed event to help diagnosing project load failures.
-                workspace.WorkspaceFailed += (o, e) => Console.WriteLine(e.Diagnostic.Message);
-
-                //var projectPath = @"C:\Users\Никита\source\repos\ReflectionAnalyzerSA\ActivatorTest\ActivatorTest.csproj";
-                var projectPath = @"..\..\..\..\ActivatorTest\ActivatorTest.csproj";
-
-                // Attach progress reporter so we print projects as they are loaded.
-                var project = await workspace.OpenProjectAsync(projectPath);
-                Console.WriteLine($"Finished loading project '{projectPath}'");
-
-                // TODO: Do analysis on the projects in the loaded solution
-                var programCs = project.Documents.First(d => d.Name.Equals(@"Program.cs"));
-                Console.WriteLine($"Open source code file {programCs.Name}");
-
-                var syntaxTree = await programCs.GetSyntaxTreeAsync();
-                var semanticModel = await programCs.GetSemanticModelAsync();
-
-                var root = syntaxTree.GetCompilationUnitRoot();
-
-                var nodes = GetCreateInstanceNodes(root)
-                    .ToList();
-                foreach (var node in nodes)
-                    Console.WriteLine(node);
+                var (assembly, type) = typeWithAssembly;
+                Console.WriteLine($"{assembly}.{type}");
             }
         }
 
-        static IEnumerable<InvocationExpressionSyntax> GetCreateInstanceNodes(CompilationUnitSyntax root)
+        private static IEnumerable<(string, string)> ProcessNodes(IEnumerable<InvocationExpressionSyntax> nodes, SemanticModel semanticModel)
+        {
+            var reservedTypesWithAssemblies = new List<(string, string)>();
+            foreach (var node in nodes)
+            {
+                Console.WriteLine(node);
+                reservedTypesWithAssemblies.AddRange(ProcessInvocationsArgs(node, semanticModel));
+            }
+            return reservedTypesWithAssemblies;
+        }
+
+        private static IEnumerable<(string, string)> ProcessInvocationsArgs(InvocationExpressionSyntax invocation, SemanticModel semanticModel)
+        {
+            var symbol = (IMethodSymbol)semanticModel.GetSymbolInfo(invocation).Symbol;
+            if (symbol.TypeArguments.Length > 0)
+                return ProcessGenericTypeCase(invocation, semanticModel, symbol);
+            if (symbol.Parameters.Length > 0)
+                return ProcessTypeAsArgumentCase(invocation, semanticModel);
+            throw new NotSupportedException();
+        }
+
+        private static IEnumerable<(string, string)> ProcessTypeAsArgumentCase(InvocationExpressionSyntax invocation, SemanticModel semanticModel)
+        {
+            var typeArg = invocation.ArgumentList.Arguments[0].Expression;
+            switch (typeArg)
+            {
+                case InvocationExpressionSyntax innerInvocation:
+                    return new List<(string, string)> { ProcessInnerInvocation(innerInvocation.Expression, semanticModel) };
+                case TypeOfExpressionSyntax typeOfExpressionSyntax:
+                    return new List<(string, string)> { ProcessInnerInvocation(typeOfExpressionSyntax, semanticModel) };
+            }
+
+            var dataFlowAnalysis = semanticModel.AnalyzeDataFlow(typeArg);
+            var inFlow = dataFlowAnalysis.DataFlowsIn[0];
+            var syntaxInFlow = inFlow.DeclaringSyntaxReferences[0].GetSyntax();
+            switch (syntaxInFlow)
+            {
+                case VariableDeclaratorSyntax declaratorSyntax:
+                    return new List<(string, string)>
+                        {ProcessInnerInvocation(declaratorSyntax.Initializer.Value, semanticModel)};
+                case ParameterSyntax parameterSyntax:
+                {
+                    var method = (MethodDeclarationSyntax) ((ParameterListSyntax) parameterSyntax.Parent).Parent;
+                    var symbol = semanticModel.GetDeclaredSymbol(method);
+                    var nodes = GetNodes(semanticModel.SyntaxTree.GetRoot(), semanticModel, symbol.ContainingType.Name,
+                        symbol.Name).ToList();
+                    return ProcessNodes(nodes, semanticModel);
+                }
+                default:
+                    throw new NotSupportedException();
+            }
+        }
+
+        private static IEnumerable<(string, string)> ProcessGenericTypeCase(InvocationExpressionSyntax invocation, SemanticModel semanticModel, IMethodSymbol symbol)
+        {
+            var constructedType = symbol.TypeArguments[0];
+            if (constructedType.Kind != SymbolKind.TypeParameter)
+            {
+                return new List<(string, string)> { (constructedType.ContainingAssembly.Name, constructedType.Name) };
+            }
+
+            var methodSymbol = constructedType.ContainingSymbol;
+            var methodName = methodSymbol.Name;
+            var className = methodSymbol.ContainingSymbol.Name;
+
+            var nodes = GetNodes(semanticModel.SyntaxTree.GetRoot(), semanticModel, className, methodName)
+                .Where(n =>
+                {
+                    var s = (IMethodSymbol) semanticModel.GetSymbolInfo(n).Symbol;
+                    return s.TypeParameters.Contains(constructedType);
+                });
+            return ProcessNodes(nodes, semanticModel);
+        }
+
+        private static (string, string) ProcessInnerInvocation(ExpressionSyntax expressionSyntax, SemanticModel semanticModel)
+        {
+            switch (expressionSyntax)
+            {
+                case MemberAccessExpressionSyntax getTypeExp when getTypeExp.Name.Identifier.Text.Equals("GetType"):
+                {
+                    var type = semanticModel.GetTypeInfo(getTypeExp.Expression).Type;
+                    return (type.ContainingAssembly.Name, type.Name);
+                }
+                case TypeOfExpressionSyntax typeOfExp:
+                {
+                    var type = semanticModel.GetTypeInfo(typeOfExp.Type).Type;  
+                    return (type.ContainingAssembly.Name, type.Name);
+                }
+                default:
+                    throw new NotSupportedException();
+            }
+        }
+
+        private static IEnumerable<InvocationExpressionSyntax> GetNodes(SyntaxNode root, SemanticModel semanticModel, string className, string methodName)
         {
             return root.DescendantNodes()
                 .OfType<InvocationExpressionSyntax>()
-                .Where(IsActivatorCreateInstanceExpression);
+                .Where(IsActivatorCreateInstanceExpression(semanticModel, className, methodName));
         }
 
-        static bool IsActivatorCreateInstanceExpression(InvocationExpressionSyntax expression)
+        private static Func<InvocationExpressionSyntax, bool> IsActivatorCreateInstanceExpression(SemanticModel semanticModel, string className, string methodName)
         {
-            if (expression.Expression is MemberAccessExpressionSyntax memberAccess)
+            bool DoCheck(InvocationExpressionSyntax expression)
             {
-                if (memberAccess.Expression is IdentifierNameSyntax identifierName && !identifierName.Identifier.Text.Equals("Activator"))
-                    return false;
-                return memberAccess.Name.Identifier.Text.Equals("CreateInstance");
-            }
-            return false;
-        }
-
-        static void PrintNodes(SyntaxNode node, int tabsCount = 0)
-        {
-            if(!node.ChildNodes().Any())
-                Console.WriteLine($"{new string(Enumerable.Repeat('\t', tabsCount).ToArray())}{node}");
-
-            foreach (var n in node.ChildNodes())
-                PrintNodes(n, tabsCount + 1);
-        }
-
-        private static VisualStudioInstance SelectVisualStudioInstance(VisualStudioInstance[] visualStudioInstances)
-        {
-            Console.WriteLine("Multiple installs of MSBuild detected please select one:");
-            for (int i = 0; i < visualStudioInstances.Length; i++)
-            {
-                Console.WriteLine($"Instance {i + 1}");
-                Console.WriteLine($"    Name: {visualStudioInstances[i].Name}");
-                Console.WriteLine($"    Version: {visualStudioInstances[i].Version}");
-                Console.WriteLine($"    MSBuild Path: {visualStudioInstances[i].MSBuildPath}");
+                var s = semanticModel.GetSymbolInfo(expression).Symbol;
+                return s.Kind == SymbolKind.Method && s.ContainingType.Name.Equals(className) && s.Name.Equals(methodName);
             }
 
-            while (true)
-            {
-                var userResponse = Console.ReadLine();
-                if (int.TryParse(userResponse, out int instanceNumber) &&
-                    instanceNumber > 0 &&
-                    instanceNumber <= visualStudioInstances.Length)
-                {
-                    return visualStudioInstances[instanceNumber - 1];
-                }
-                Console.WriteLine("Input not accepted, try again.");
-            }
-        }
-
-        private class ConsoleProgressReporter : IProgress<ProjectLoadProgress>
-        {
-            public void Report(ProjectLoadProgress loadProgress)
-            {
-                var projectDisplay = Path.GetFileName(loadProgress.FilePath);
-                if (loadProgress.TargetFramework != null)
-                {
-                    projectDisplay += $" ({loadProgress.TargetFramework})";
-                }
-
-                Console.WriteLine($"{loadProgress.Operation,-15} {loadProgress.ElapsedTime,-15:m\\:ss\\.fffffff} {projectDisplay}");
-            }
+            return DoCheck;
         }
     }
 }
