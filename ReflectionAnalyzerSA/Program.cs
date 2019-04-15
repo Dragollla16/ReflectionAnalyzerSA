@@ -96,7 +96,7 @@ namespace ReflectionAnalyzerSA
             var semanticModel = compilation.GetSemanticModel(syntaxTree);
             
             var nodes = GetNodes(syntaxTree.GetRoot(), semanticModel, "Activator", "CreateInstance");
-            var reservedTypesWithAssemblies = ProcessNodes(nodes, semanticModel);
+            var reservedTypesWithAssemblies = ProcessNodes(nodes, semanticModel).ToList();
             
             Console.WriteLine();
             foreach (var typeWithAssembly in reservedTypesWithAssemblies)
@@ -104,11 +104,28 @@ namespace ReflectionAnalyzerSA
                 var (assembly, type) = typeWithAssembly;
                 Console.WriteLine($"{assembly}.{type}");
             }
+
+            Console.WriteLine(CreateLinkerConfiguration(reservedTypesWithAssemblies));
+        }
+        
+        private static IEnumerable<InvocationExpressionSyntax> GetNodes(SyntaxNode root, SemanticModel semanticModel, string className, string methodName) =>
+            root.DescendantNodes()
+                .OfType<InvocationExpressionSyntax>()
+                .Where(IsActivatorCreateInstanceExpression(semanticModel, className, methodName));
+
+        private static Func<InvocationExpressionSyntax, bool> IsActivatorCreateInstanceExpression(SemanticModel semanticModel, string className, string methodName)
+        {
+            bool DoCheck(InvocationExpressionSyntax expression)
+            {
+                var s = semanticModel.GetSymbolInfo(expression).Symbol;
+                return s.Kind == SymbolKind.Method && s.ContainingType.Name.Equals(className) && s.Name.Equals(methodName);
+            }
+            return DoCheck;
         }
 
         private static IEnumerable<(string, string)> ProcessNodes(IEnumerable<InvocationExpressionSyntax> nodes, SemanticModel semanticModel, bool withGeneric = true)
         {
-            var reservedTypesWithAssemblies = new List<(string, string)>();
+            var reservedTypesWithAssemblies = new HashSet<(string, string)>();
             foreach (var node in nodes)
             {
                 if (!withGeneric)
@@ -118,12 +135,13 @@ namespace ReflectionAnalyzerSA
                         continue;
                 }
                 Console.WriteLine(node);
-                reservedTypesWithAssemblies.AddRange(ProcessInvocationsArgs(node, semanticModel));
+                foreach (var type in GetInvocationsArgsOrigins(node, semanticModel))
+                    reservedTypesWithAssemblies.Add(type);
             }
             return reservedTypesWithAssemblies;
         }
 
-        private static IEnumerable<(string, string)> ProcessInvocationsArgs(InvocationExpressionSyntax invocation, SemanticModel semanticModel)
+        private static IEnumerable<(string, string)> GetInvocationsArgsOrigins(InvocationExpressionSyntax invocation, SemanticModel semanticModel)
         {
             var symbol = (IMethodSymbol)semanticModel.GetSymbolInfo(invocation).Symbol;
             if (symbol.TypeArguments.Length > 0)
@@ -203,19 +221,9 @@ namespace ReflectionAnalyzerSA
             }
         }
 
-        private static IEnumerable<InvocationExpressionSyntax> GetNodes(SyntaxNode root, SemanticModel semanticModel, string className, string methodName) =>
-            root.DescendantNodes()
-                .OfType<InvocationExpressionSyntax>()
-                .Where(IsActivatorCreateInstanceExpression(semanticModel, className, methodName));
-
-        private static Func<InvocationExpressionSyntax, bool> IsActivatorCreateInstanceExpression(SemanticModel semanticModel, string className, string methodName)
+        private static string CreateLinkerConfiguration(IEnumerable<(string Assembly, string Type)> reservedTypes)
         {
-            bool DoCheck(InvocationExpressionSyntax expression)
-            {
-                var s = semanticModel.GetSymbolInfo(expression).Symbol;
-                return s.Kind == SymbolKind.Method && s.ContainingType.Name.Equals(className) && s.Name.Equals(methodName);
-            }
-            return DoCheck;
+            return "";
         }
     }
 }
