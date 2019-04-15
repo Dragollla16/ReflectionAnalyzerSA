@@ -98,13 +98,6 @@ namespace ReflectionAnalyzerSA
             var nodes = GetNodes(syntaxTree.GetRoot(), semanticModel, "Activator", "CreateInstance");
             var reservedTypesWithAssemblies = ProcessNodes(nodes, semanticModel).ToList();
             
-            Console.WriteLine();
-            foreach (var typeWithAssembly in reservedTypesWithAssemblies)
-            {
-                var (assembly, type) = typeWithAssembly;
-                Console.WriteLine($"{assembly}.{type}");
-            }
-
             Console.WriteLine(CreateLinkerConfiguration(reservedTypesWithAssemblies));
         }
         
@@ -134,7 +127,6 @@ namespace ReflectionAnalyzerSA
                     if (symbol.TypeArguments.Length > 0)
                         continue;
                 }
-                Console.WriteLine(node);
                 foreach (var type in GetInvocationsArgsOrigins(node, semanticModel))
                     reservedTypesWithAssemblies.Add(type);
             }
